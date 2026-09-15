@@ -87,6 +87,21 @@ jobs:
           sed -i "s|export TORCH_CUDA_ARCH_LIST='9.0a 10.0a'|export TORCH_CUDA_ARCH_LIST='7.0' \&\& echo 'Skipping DeepEP build for V100' \&\& exit 0|" docker/Dockerfile
 
           echo ""
+          echo "=== Patching Dockerfile: skip flashinfer-jit-cache (not available for cu124) ==="
+          python3 << 'PYEOF'
+          with open('docker/Dockerfile', 'r') as f:
+              content = f.read()
+          # 将 flashinfer-jit-cache 的安装替换为跳过
+          content = content.replace(
+              'uv pip install --system flashinfer-jit-cache==${FLASHINFER_VERSION}',
+              'echo "Skipping flashinfer-jit-cache (not available for this CUDA version)"'
+          )
+          with open('docker/Dockerfile', 'w') as f:
+              f.write(content)
+          print("Patched flashinfer-jit-cache")
+          PYEOF
+
+          echo ""
           echo "=== Patching CMakeLists.txt: disable missing SM70 kernel targets ==="
           python3 << 'PYEOF'
           with open('CMakeLists.txt', 'r') as f:
@@ -135,7 +150,6 @@ jobs:
           removed = 0
           while i < len(lines):
               line = lines[i]
-              # 检测 ext_modules.append( 块
               if 'ext_modules.append(' in line and 'CMakeExtension' not in line:
                   block = [line]
                   j = i + 1
@@ -153,7 +167,6 @@ jobs:
                   else:
                       output.extend(block)
                   i = j
-              # 单行 ext_modules.append(CMakeExtension(...))
               elif 'ext_modules.append(' in line and any(t in line for t in targets):
                   output.append('# ' + line)
                   removed += 1
