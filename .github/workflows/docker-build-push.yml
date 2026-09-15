@@ -1,0 +1,153 @@
+name: Build and Push Docker Image
+
+# 手动触发：在 Actions 页面点击 "Run workflow" 即可拉取最新上游代码并构建推送
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: '上游仓库分支'
+        required: true
+        default: 'main'
+      image_tag:
+        description: '镜像标签（留空则使用 latest + 短 commit hash）'
+        required: false
+        default: ''
+      cuda_version:
+        description: 'CUDA 版本（V100/sm_70 必须用 12.x）'
+        required: true
+        default: '12.4.1'
+      torch_cuda_arch_list:
+        description: 'PyTorch CUDA 架构列表'
+        required: true
+        default: '7.0'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  sync-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      # ---------------------------------------------------------------
+      # Step 1: 检出本仓库（fork）
+      # ---------------------------------------------------------------
+      - name: Checkout forked repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # Step 2: 配置 Git 用户信息
+      # ---------------------------------------------------------------
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # ---------------------------------------------------------------
+      # Step 3: 添加上游仓库并拉取最新代码
+      # ---------------------------------------------------------------
+      - name: Pull latest from upstream
+        run: |
+          UPSTREAM_BRANCH="${{ github.event.inputs.upstream_branch }}"
+          echo "Syncing from upstream 1CatAI/1Cat-vLLM @ ${UPSTREAM_BRANCH}..."
+
+          git remote add upstream https://github.com/1CatAI/1Cat-vLLM.git || true
+          git fetch upstream "${UPSTREAM_BRANCH}"
+
+          # 合并上游最新代码到当前分支（保留我们的 workflow 文件）
+          git merge "upstream/${UPSTREAM_BRANCH}" --allow-unrelated-histories --no-edit || {
+            echo "::warning::Merge conflicts detected, keeping our .github files..."
+            git checkout --ours -- .github/ 2>/dev/null || true
+            git add -A
+            git commit --no-edit || true
+          }
+
+          # 推送到本仓库
+          git push origin HEAD:main
+          echo "Upstream sync complete."
+
+      # ---------------------------------------------------------------
+      # Step 4: 获取最新 commit hash 用于镜像标签
+      # ---------------------------------------------------------------
+      - name: Get image metadata
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          CUSTOM_TAG="${{ github.event.inputs.image_tag }}"
+          if [ -n "$CUSTOM_TAG" ]; then
+            echo "tag=$CUSTOM_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      # ---------------------------------------------------------------
+      # Step 5: 设置 Docker Buildx
+      # ---------------------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ---------------------------------------------------------------
+      # Step 6: 登录到 GitHub Container Registry (GHCR)
+      # ---------------------------------------------------------------
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---------------------------------------------------------------
+      # Step 7: 构建并推送 Docker 镜像
+      # ---------------------------------------------------------------
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          target: vllm-openai
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}
+          platforms: linux/amd64
+          build-args: |
+            CUDA_VERSION=${{ github.event.inputs.cuda_version }}
+            torch_cuda_arch_list=${{ github.event.inputs.torch_cuda_arch_list }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---------------------------------------------------------------
+      # Step 8: 输出构建结果
+      # ---------------------------------------------------------------
+      - name: Build summary
+        run: |
+          echo "## Docker 镜像构建完成" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **镜像地址**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit 标签**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **CUDA 版本**: \`${{ github.event.inputs.cuda_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **CUDA 架构**: \`${{ github.event.inputs.torch_cuda_arch_list }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **上游分支**: \`${{ github.event.inputs.upstream_branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 拉取镜像" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 运行容器（V100 示例）" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker run --gpus all -p 8000:8000 \\" >> $GITHUB_STEP_SUMMARY
+          echo "  -v ~/.cache/huggingface:/root/.cache/huggingface \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  --model Qwen/Qwen3.8-27B --dtype auto --api-key token-abc123" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
