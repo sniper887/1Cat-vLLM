@@ -81,13 +81,10 @@ jobs:
         run: |
           echo "=== Patching requirements/build/cuda.txt: pin CMake < 4.0 ==="
           sed -i 's/^cmake>=3.26.1$/cmake>=3.26.1,<4.0/' requirements/build/cuda.txt
-          grep -n "cmake" requirements/build/cuda.txt
 
           echo ""
           echo "=== Patching Dockerfile: skip DeepEP (requires sm_80+) ==="
-          # DeepEP 使用了 elect 指令，仅支持 sm_80+，V100 不支持
           sed -i "s|export TORCH_CUDA_ARCH_LIST='9.0a 10.0a'|export TORCH_CUDA_ARCH_LIST='7.0' \&\& echo 'Skipping DeepEP build for V100' \&\& exit 0|" docker/Dockerfile
-          grep -n "Skipping DeepEP" docker/Dockerfile || echo "  (DeepEP patch applied)"
 
           echo ""
           echo "=== Patching CMakeLists.txt: disable missing SM70 kernel targets ==="
@@ -98,7 +95,7 @@ jobs:
           targets = ['_h3_flashattn_C', '_sm70_sparse_attention_C', '_h3_flashinfer_C']
           output = []
           i = 0
-          disabled_count = 0
+          disabled = 0
           while i < len(lines):
               line = lines[i]
               if 'define_extension_target(' in line:
@@ -114,17 +111,59 @@ jobs:
                       for b in block:
                           output.append('# ' + b)
                       output.append('# (disabled: source files missing in build context)\n')
-                      disabled_count += 1
+                      disabled += 1
                   else:
                       output.extend(block)
                   i = j
               else:
                   output.append(line)
                   i += 1
-
           with open('CMakeLists.txt', 'w') as f:
               f.writelines(output)
-          print(f"Disabled {disabled_count} SM70 kernel targets")
+          print(f"Disabled {disabled} CMake targets")
+          PYEOF
+
+          echo ""
+          echo "=== Patching setup.py: remove missing SM70 extensions ==="
+          python3 << 'PYEOF'
+          with open('setup.py', 'r') as f:
+              lines = f.readlines()
+
+          targets = ['_h3_flashinfer_C', '_h3_flashattn_C', '_sm70_sparse_attention_C']
+          output = []
+          i = 0
+          removed = 0
+          while i < len(lines):
+              line = lines[i]
+              # 检测 ext_modules.append( 块
+              if 'ext_modules.append(' in line and 'CMakeExtension' not in line:
+                  block = [line]
+                  j = i + 1
+                  paren_count = line.count('(') - line.count(')')
+                  while j < len(lines) and paren_count > 0:
+                      block.append(lines[j])
+                      paren_count += lines[j].count('(') - lines[j].count(')')
+                      j += 1
+                  block_text = ''.join(block)
+                  if any(t in block_text for t in targets):
+                      for b in block:
+                          output.append('# ' + b)
+                      output.append('# (removed: missing source files)\n')
+                      removed += 1
+                  else:
+                      output.extend(block)
+                  i = j
+              # 单行 ext_modules.append(CMakeExtension(...))
+              elif 'ext_modules.append(' in line and any(t in line for t in targets):
+                  output.append('# ' + line)
+                  removed += 1
+                  i += 1
+              else:
+                  output.append(line)
+                  i += 1
+          with open('setup.py', 'w') as f:
+              f.writelines(output)
+          print(f"Removed {removed} setup.py extensions")
           PYEOF
 
           echo ""
@@ -144,7 +183,6 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          # Docker 镜像名必须全小写
           echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------
@@ -194,7 +232,6 @@ jobs:
           echo "- **Commit 标签**: \`${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:sha-${{ steps.meta.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **CUDA 版本**: \`${{ github.event.inputs.cuda_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **CUDA 架构**: \`${{ github.event.inputs.torch_cuda_arch_list }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **上游分支**: \`${{ github.event.inputs.upstream_branch }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 拉取镜像" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
