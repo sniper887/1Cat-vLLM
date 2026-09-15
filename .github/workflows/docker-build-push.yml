@@ -75,6 +75,20 @@ jobs:
           echo "Upstream sync complete."
 
       # ---------------------------------------------------------------
+      # Step 3.5: Patch Dockerfile — 将硬编码的 TORCH_CUDA_ARCH_LIST 替换为用户指定值
+      # ---------------------------------------------------------------
+      - name: Patch Dockerfile for V100 compatibility
+        run: |
+          echo "Before patch:"
+          grep -n "TORCH_CUDA_ARCH_LIST='9.0a 10.0a'" docker/Dockerfile || echo "  (hardcoded line not found)"
+
+          # 将 DeepEP 构建阶段硬编码的 '9.0a 10.0a' 替换为用户指定的架构
+          sed -i "s/export TORCH_CUDA_ARCH_LIST='9.0a 10.0a'/export TORCH_CUDA_ARCH_LIST='${{ github.event.inputs.torch_cuda_arch_list }}'/" docker/Dockerfile
+
+          echo "After patch:"
+          grep -n "TORCH_CUDA_ARCH_LIST" docker/Dockerfile
+
+      # ---------------------------------------------------------------
       # Step 4: 获取最新 commit hash 用于镜像标签
       # ---------------------------------------------------------------
       - name: Get image metadata
