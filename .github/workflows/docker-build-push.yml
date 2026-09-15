@@ -23,7 +23,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 permissions:
   contents: write
@@ -89,6 +88,8 @@ jobs:
             echo "tag=latest" >> "$GITHUB_OUTPUT"
           fi
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          # Docker 镜像名必须全小写
+          echo "image_name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------
       # Step 5: 设置 Docker Buildx
@@ -117,8 +118,8 @@ jobs:
           target: vllm-openai
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:sha-${{ steps.meta.outputs.short_sha }}
           platforms: linux/amd64
           build-args: |
             CUDA_VERSION=${{ github.event.inputs.cuda_version }}
@@ -133,21 +134,21 @@ jobs:
         run: |
           echo "## Docker 镜像构建完成" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **镜像地址**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit 标签**: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ steps.meta.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **镜像地址**: \`${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit 标签**: \`${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:sha-${{ steps.meta.outputs.short_sha }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **CUDA 版本**: \`${{ github.event.inputs.cuda_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **CUDA 架构**: \`${{ github.event.inputs.torch_cuda_arch_list }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- **上游分支**: \`${{ github.event.inputs.upstream_branch }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 拉取镜像" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
-          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 运行容器（V100 示例）" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
           echo "docker run --gpus all -p 8000:8000 \\" >> $GITHUB_STEP_SUMMARY
           echo "  -v ~/.cache/huggingface:/root/.cache/huggingface \\" >> $GITHUB_STEP_SUMMARY
-          echo "  ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \\" >> $GITHUB_STEP_SUMMARY
+          echo "  ${{ env.REGISTRY }}/${{ steps.meta.outputs.image_name }}:${{ steps.meta.outputs.tag }} \\" >> $GITHUB_STEP_SUMMARY
           echo "  --model Qwen/Qwen3.8-27B --dtype auto --api-key token-abc123" >> $GITHUB_STEP_SUMMARY
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
