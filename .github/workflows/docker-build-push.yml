@@ -96,6 +96,11 @@ jobs:
               'uv pip install --system flashinfer-jit-cache==${FLASHINFER_VERSION}',
               'echo "Skipping flashinfer-jit-cache (not available for this CUDA version)"'
           )
+          # 跳过 ep_kernels 安装（DeepEP 已跳过，dist 目录为空）
+          content = content.replace(
+              'uv pip install --system ep_kernels/dist/*.whl',
+              'echo "Skipping ep_kernels install (DeepEP skipped for V100)"'
+          )
           with open('docker/Dockerfile', 'w') as f:
               f.write(content)
           print("Patched flashinfer-jit-cache")
